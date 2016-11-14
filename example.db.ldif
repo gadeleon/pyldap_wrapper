@@ -1,0 +1,37 @@
+# Load modules for database type
+dn: cn=module,cn=config
+objectclass: olcModuleList
+cn: module
+olcModuleLoad: back_hdb.la
+
+# Create directory database
+dn: olcDatabase=hdb,cn=config
+objectClass: olcDatabaseConfig
+objectClass: olchdbConfig
+olcDatabase: hdb
+# Domain name (e.g. home.local)
+olcSuffix: dc=example,dc=com
+# Location on system where database is stored
+olcDbDirectory: /var/lib/ldap
+# Manager of the database
+olcRootDN: cn=admin,dc=example,dc=com
+# USE SLAPDPASSWORD FOR PASSWORD!
+olcRootPW: # FILL ME IN!
+# Indices in database to speed up searches
+olcDbIndex: uid pres,eq
+olcDbIndex: cn,sn,mail pres,eq,approx,sub
+olcDbIndex: objectClass eq
+# Users can't change their password
+# Anonymous can't authenciate against the password
+# Only allow admin to change anyone's password
+olcAccess: to attrs=userPassword
+  by self none
+  by anonymous none
+  by dn.base="cn=admin,dc=example,dc=com" write
+  by * none
+# Only Allow users to read their own record
+# Allow anyone to read directory
+olcAccess: to *
+  by self read
+  by dn.base="cn=admin,dc=example,dc=com" write
+  by * read
