@@ -458,7 +458,7 @@ class WLDAP(object):
         return r[0][1]['userPassword'][0]
 
 
-    def get_user_attribute_from_account(self, email, attr, user_ou='accounts'):
+    def get_user_attribute_from_account(self, email, attr, user_ou='accounts', multi=False):
         '''
         Returns the attribute attr of a user
         '''
@@ -466,18 +466,21 @@ class WLDAP(object):
         query = '(cn={})'.format(email)
         r = self.ldapobject.search_s(basedn, ldap.SCOPE_SUBTREE, query, [attr])
         try:
-            self.logger.debug('Located "{}"'.format(r[0][1][attr][0]))
-            return r[0][1][attr][0]
+            self.logger.debug('Located "{}"'.format(r[0][1][attr]))
+            if multi:
+                return r[0][1][attr]
+            else:
+                return r[0][1][attr][0]
         except KeyError:
-            self.logger.warn('Warning: "{}" is not a valid attribute for {},' 
-                ' returning empty string'.format(attr, email))
+            self.logger.debug('Attribute "{}" missing for "{}". Returning empty\
+                string.'.format(attr, email))
             return ''
         except IndexError:
             msg = 'Error: "{}" does not appear to be a valid email address.'\
                 .format(email)
             self.logger.error(msg)
             sys.stderr.write(msg+'\n')
-            sys.exit(12)
+            raise SystemExit
 
 
     def _1_is_account_in_ugroup(self, group_list, email, user_ou='accounts'):
@@ -581,6 +584,52 @@ class WLDAP(object):
         else:
             self.logger.info('Deletion succeeded, "{}" removed from group "{}"'\
                 .format(target_cn, dn))
+    
+
+    def update_group_memberships(self, group_name, memberships=[], user_ou='accounts', group_ou='groups'):
+        '''
+        "Bulk" update for group memberships. Effectively replaces the old list 
+        with the variable memberships Best used with seeding first time 
+        membership population.
+        '''
+        dn = self._form_dn(ou=group_ou, cn=group_name)
+        # Some debug fun
+        self.logger.debug('Number of memberships in "{}":{}'.format(group_name, len(memberships)))
+        if len(memberships) <= 10:
+            self.logger.debug('Small number of memberships, listing them out: {}'.format(memberships))
+        old_members = self.get_members_of_ugroup(group_name, group_ou=group_ou)
+        if type(old_members) is list and len(old_members) == 0:
+            self.logger.debug('Group "{}" appears to be empty'.format(group_name))
+        elif not old_members:
+            self.logger.warn('The group, "{}", appears to not exist. Returning false.'.format(group_name))
+            return False
+        old_entry = {'uniquemember':old_members}
+        self.logger.debug('Grabbed list of old members for group "{}"'.format(group_name))
+        # Convert memberships into proper format/syntax
+        self.logger.debug('Taking emails belonging to group "{}" and formatting for ldap.'.format(group_name))
+        new_members = []
+        for email in memberships:
+            cn = self._form_dn(ou=user_ou, cn=email)
+            new_members.append(cn)
+        self.logger.debug('Emails formatted for ldap for group "{}"'.format(group_name))
+        new_entry = {'uniquemember': new_members}
+        self.logger.debug('Prepared list of new memberships for group "{}"'.format(group_name))
+        #self.logger.debug('Old: {}, New: {}'.format(old_entry, new_entry))
+        self.logger.debug('Forming modlist for "{}" group addition'.format(group_name))
+        ldif = modlist.modifyModlist(old_entry, new_entry)
+        self.logger.debug('Modlist formation complete for "{}"'.format(group_name))
+        # I don't know what errors to handle for this, so no try catch block yet
+        self.ldapobject.modify_s(dn, ldif)
+        # Verify if change succeeded
+        curmem = self.get_members_of_ugroup(group_name)
+        if len(curmem) == len(memberships):
+            self.logger.info('QUALIFIED SUCCESS! Number of members in group "{}" matches the number we wanted to put in.'\
+                             .format(group_name))
+            return True
+        else:
+            self.logger.warn('Membership in group "{}" does not match number of members we expect.'.format(group_name))
+            return False
+
 
     def rename_account_rdn(self, email, new_email, user_ou='accounts'):
         dn = self._form_dn(ou=user_ou, cn=email)
@@ -618,18 +667,26 @@ class WLDAP(object):
             .format(email))
 
 
-    def add_account_attribute(self, email, attr, value, user_ou='accounts'):
+        def replace_account_attribute(self, email, attr, value, user_ou='accounts', multi=False):
         '''
-        Adds an attribute for the specificed user, if value is empty, default
-        to email
+        Replaces the attribute of the specified user.
         '''
-        if value == '':
-            value = email
+        self.logger.debug('Replacing value of "{}"'.format(attr))
         dn = self._form_dn(ou=user_ou, cn=email)
-        self.logger.debug('Adding {}:{} to {}'.format(attr, value, dn))        
-        mod_attrs = [(ldap.MOD_ADD, attr, value)]
-        self.ldapobject.modify_s(dn, mod_attrs)
-        self.logger.info('Added {}:{} to {}'.format(attr, value, dn))
+        self.logger.debug('Retrieving old value of "{}"'.format(attr))
+        old_entry = self.get_user_attribute_from_account(email, attr)
+        self.logger.debug('Retrieved "{}" from "{}"'.format(old_entry, attr))
+        old_entry = {attr:[old_entry]}
+        self.logger.debug('Formed old entry "{}"'.format(old_entry))
+        if multi:
+            new_entry = {attr:value}
+        else:
+            new_entry = {attr:[value]}
+        self.logger.debug('Formed new entry "{}"'.format({attr:value}))
+        ldif = modlist.modifyModlist(old_entry, new_entry)
+        self.ldapobject.modify_s(dn, ldif)
+        self.logger.debug('Replaced "{}" value, "{}", with "{}" '\
+            .format(attr, old_entry[attr], value))
 
 
     def replace_account_attribute(self, email, attr, value, user_ou='accounts'):
